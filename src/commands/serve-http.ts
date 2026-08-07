@@ -42,6 +42,7 @@ import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/sco
 import { normalizeTokenScopes } from '../core/legacy-token-scope.ts';
 import { normalizeSourceInput, normalizeFederatedReadInput } from '../core/source-id.ts';
 import { summarizeMcpParams, dispatchToolCall, requestLogStatusForResult } from '../mcp/dispatch.ts';
+import { isLoopbackAddress } from '../mcp/http-transport.ts';
 import { resolveStrictParamsMode } from '../mcp/validate-params.ts';
 import { buildToolDefs } from '../mcp/tool-defs.ts';
 import {
@@ -2444,6 +2445,14 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       // verifyAccessToken. The env-fallback is gone.
       const tokenSourceId = authInfo.sourceId ?? 'default';
 
+      // Loopback local-operator trust: only the real TCP socket peer counts
+      // (req.socket.remoteAddress). Never X-Forwarded-For — the
+      // GBRAIN_HTTP_TRUST_PROXY path is attacker-spoofable. Behind a reverse
+      // proxy remoteAddress resolves to the proxy, which conservatively stays
+      // remote (fail-closed). Bearer auth + scope checks are still enforced
+      // regardless of this flag.
+      const isLoopback = isLoopbackAddress(req.socket.remoteAddress);
+
       // #3242 parity: the legacy-transport and stdio dispatch sites widen a
       // no-grant caller's unqualified reads across the federated source set
       // (localFederatedSourceIds); this SDK-transport site never did, so the
@@ -2462,7 +2471,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       let toolResult: Awaited<ReturnType<typeof dispatchToolCall>>;
       try {
         toolResult = await dispatchToolCall(engine, name, params as Record<string, unknown> | undefined, {
-          remote: true,
+          remote: !isLoopback,
           // WP1/D7: network transport — the dispatch-layer localOnly
           // backstop keys off this marker.
           transport: 'http',
@@ -3187,6 +3196,24 @@ ${bootstrapFromEnv
   : suppressBootstrapPrint
     ? '║  Admin Token: hidden (non-TTY log-leak guard)        ║\n║  set $GBRAIN_ADMIN_BOOTSTRAP_TOKEN, or pass          ║\n║  --print-admin-token on a trusted terminal.          ║\n╚══════════════════════════════════════════════════════╝'
     : `║  Admin Token (paste into /admin login):              ║\n║  ${bootstrapToken.substring(0, 50)}  ║\n║  ${bootstrapToken.substring(50).padEnd(50)}  ║\n╚══════════════════════════════════════════════════════╝`}
+`);
+  });
+
+  await waitForHttpServerLifecycle(httpServer);
+}
+End(50)}  ║\n╚══════════════════════════════════════════════════════╝`}
+`);
+  });
+
+  await waitForHttpServerLifecycle(httpServer);
+}
+════╝`}
+`);
+  });
+
+  await waitForHttpServerLifecycle(httpServer);
+}
+End(50)}  ║\n╚══════════════════════════════════════════════════════╝`}
 `);
   });
 
