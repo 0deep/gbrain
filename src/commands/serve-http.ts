@@ -31,6 +31,7 @@ import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oa
 import type { SqlQuery } from '../core/oauth-provider.ts';
 import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/scope.ts';
 import { summarizeMcpParams, dispatchToolCall } from '../mcp/dispatch.ts';
+import { isLoopbackAddress } from '../mcp/http-transport.ts';
 import { paramDefToSchema } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig } from '../core/config.ts';
@@ -2015,10 +2016,17 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       // verifyAccessToken. The env-fallback is gone.
       const tokenSourceId = authInfo.sourceId ?? 'default';
 
+      // Loopback local-operator trust: only the real TCP socket peer counts
+      // (req.socket.remoteAddress). Never X-Forwarded-For — the
+      // GBRAIN_HTTP_TRUST_PROXY path is attacker-spoofable. Behind a reverse
+      // proxy remoteAddress resolves to the proxy, which conservatively stays
+      // remote (fail-closed). Bearer auth + scope checks are still enforced
+      // regardless of this flag.
+      const isLoopback = isLoopbackAddress(req.socket.remoteAddress);
       let toolResult: Awaited<ReturnType<typeof dispatchToolCall>>;
       try {
         toolResult = await dispatchToolCall(engine, name, params as Record<string, unknown> | undefined, {
-          remote: true,
+          remote: !isLoopback,
           takesHoldersAllowList: tokenAllowList,
           sourceId: tokenSourceId,
           metaHook: getBrainHotMemoryMeta,

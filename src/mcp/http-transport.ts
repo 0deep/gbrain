@@ -50,6 +50,16 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/**
+ * Loopback peer detection for local-operator trust. Only the real TCP socket
+ * peer counts — never X-Forwarded-For (spoofable via GBRAIN_HTTP_TRUST_PROXY).
+ * Returns false for unknown/missing addresses (fail-closed).
+ */
+export function isLoopbackAddress(ip: string | null | undefined): boolean {
+  if (!ip) return false;
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
 function parseCorsAllowlist(): Set<string> | null {
   const v = process.env.GBRAIN_HTTP_CORS_ORIGIN;
   if (!v) return null;
@@ -400,8 +410,21 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
             localFederated = await localFederatedSourceIds(engine, auth.sourceId, 'seed_default');
           } catch { /* scalar scope stands */ }
         }
+        // Loopback local-operator trust: a request whose TCP peer is
+        // loopback (127.0.0.1 / ::1) is treated as a local operator —
+        // remote=false so path/clone_dir overrides in sources_add etc. are
+        // honored (the operator runs the server on this machine).
+        //
+        // Detection MUST use the real socket peer via server.requestIP,
+        // never X-Forwarded-For: the proxy-trust path (GBRAIN_HTTP_TRUST_PROXY)
+        // is attacker-spoofable and would let anyone claim loopback. Behind a
+        // reverse proxy requestIP resolves to the proxy, which conservatively
+        // stays remote (fail-closed). Bearer auth + scope checks are still
+        // enforced regardless of this flag.
+        const clientIp = server.requestIP(req)?.address ?? null;
+        const isLoopback = isLoopbackAddress(clientIp);
         const result = await dispatchToolCall(engine, toolName, args, {
-          remote: true,
+          remote: !isLoopback,
           takesHoldersAllowList: auth.takesHoldersAllowList,
           sourceId: auth.sourceId,
           ...(localFederated ? { localFederatedSourceIds: localFederated } : {}),
