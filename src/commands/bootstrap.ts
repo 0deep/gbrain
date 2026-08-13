@@ -74,7 +74,7 @@ import {
   statusReport,
   type StatusReport,
 } from '../core/bootstrap/status.ts';
-import { verifyWorkspace } from '../core/bootstrap/verify.ts';
+import { verifyWorkspace, deriveWorkspaceSourceId } from '../core/bootstrap/verify.ts';
 
 export const BOOTSTRAP_HELP = `gbrain bootstrap — paste-in agent install (Claude Code / Codex)
 
@@ -206,6 +206,19 @@ function flagValues(args: string[], flag: string): string[] {
 function resolveWorkspace(args: string[]): string {
   const ws = flagValue(args, '--workspace');
   return ws ? resolve(ws) : process.cwd();
+}
+
+/**
+ * POSIX single-quote anything not already shell-safe, for commands printed
+ * as copy/paste guidance (mirror of the private `shellQuote` in
+ * core/bootstrap/hooks.ts, core/sources-ops.ts, and commands/connect.ts —
+ * same contract: `$()`/backticks in a value are inert literals once quoted).
+ * A workspace path containing a space or shell metacharacter must not turn
+ * "the exact command to run" into a broken (or, pasted blind, dangerous) one.
+ */
+function shellQuoteForDisplay(arg: string): string {
+  if (/^[A-Za-z0-9_.:/@=-]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
 // ── Shared plumbing ─────────────────────────────────────────────────────────
@@ -789,6 +802,41 @@ async function runHooks(ws: string, rest: string[], home: string, runner: ExecRu
   const gbrainHome = process.env.GBRAIN_HOME?.trim() || undefined;
 
   return withLock(ws, async () => {
+    // 0. source_id visibility seam: `hooks` is the last ENGINE-FREE phase
+    // before `verify` (which alone can detect a source_id collision — the
+    // sources registry lives only in the DB). Without this, a human who
+    // hand-registers a source before verify has no way to know the exact id
+    // the workspace expects, guesses an "intuitive" name instead, and only
+    // discovers the mismatch via a `verify` roundtrip FK error — then, after
+    // switching to the manifest's id, an `overlapping_path` error from the
+    // earlier guess still claiming the same brain/ dir. Printing the current
+    // id (and the collision-fallback id verify would derive, a pure path
+    // hash that needs no engine) up front — plus creating brain/ so
+    // registration can happen immediately — collapses that multi-round-trip
+    // loop to one command.
+    const brainDir = join(ws, 'brain');
+    mkdirSync(brainDir, { recursive: true });
+    // --force: brain/ was just created empty — `sources add` fail-fasts on a
+    // --path that exists but isn't a git repo with committed, tracked
+    // content (#2707), and gbrain deliberately never auto-git-inits a --path
+    // source itself (a --path source is the user's own directory — the
+    // consent boundary #2967 established for sync-time self-heal applies
+    // here too). --force is the sanctioned opt-in for exactly this "register
+    // before git-init exists" case (see sources-ops.ts's own not_a_git_repo
+    // message), and it is safe here because brainDir is not an arbitrary
+    // user path — it is the fixed `<workspace>/brain` subdir this phase just
+    // created. Without --force, the printed command below would itself throw
+    // not_a_git_repo the instant it's pasted.
+    const quoted = shellQuoteForDisplay(brainDir);
+    console.log(
+      `brain source: register this workspace's brain/ now if you haven't — ` +
+        `\`gbrain sources add ${sourceId} --path ${quoted} --force\` (brain/ is freshly created and empty; ` +
+        `--force is the documented opt-in for registering before git-init exists). If '${sourceId}' is ` +
+        `already claimed by a different checkout on this brain, \`gbrain bootstrap verify\` will detect the ` +
+        `collision and switch this workspace to '${deriveWorkspaceSourceId(ws)}' — re-run the same command ` +
+        `with that id instead.`,
+    );
+
     // 1. MCP registration — argv built by the host-format module, executed
     // through the runner seam, recorded on the receipt.
     const argvs =
