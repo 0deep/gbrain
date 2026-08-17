@@ -175,6 +175,15 @@ const CLI_ONLY_SELF_HELP = new Set([
   // would hide both — `gbrain dream retriage --help` printed the one-line
   // dream stub instead of the retriage contract (outside-voice CX9).
   'dream',
+  // sources ships its own printHelp() (sources.ts, wired to `case '--help'`)
+  // covering all ~28 subcommands, but was missing from this set — so
+  // `gbrain sources --help` hit the generic one-line stub, which itself says
+  // "run gbrain --help for the full command list", and the top-level help's
+  // own SOURCES block promises `sources --help` as the place to find the
+  // long tail (rename, default, attach, current, federate, set-cr-mode,
+  // webhook, harden, ...). That made the pointer circular and those
+  // subcommands undiscoverable from the CLI in either direction.
+  'sources',
   // ZE interim cleanup: the retired ze-switch shim ships truthful help
   // (sunset refusal + canonical migration command); the generic stub hid it.
   'ze-switch',
@@ -203,6 +212,11 @@ const SELF_HELP_WITHOUT_ENGINE: Record<string, () => Promise<(engine: never, arg
   // runDream accepts BrainEngine | null; --help (and `retriage --help`) is
   // answered before any engine-bearing work per the dream.ts IRON RULE.
   dream: async () => (await import('./commands/dream.ts')).runDream as never,
+  // runSources's `--help`/`-h`/undefined-subcommand branch calls printHelp()
+  // without ever touching `engine` — safe to dispatch with no brain
+  // configured, matching the reader who runs `sources --help` because they
+  // have no brain yet.
+  sources: async () => (await import('./commands/sources.ts')).runSources as never,
   // runAgent accepts BrainEngine | null; help (incl. `register --help`) is
   // answered before any engine or job-queue work (cathedral-6).
   agent: async () => (await import('./commands/agent.ts')).runAgent as never,
@@ -1522,11 +1536,17 @@ export function formatResult(
         `Stale pages: ${h.stale_pages}`,
         `Orphan pages: ${h.orphan_pages}`,
       ];
-      if (h.link_coverage !== undefined) {
+      // gbrain#4147: null = below the small-N floor — say so instead of
+      // rendering a misleading hard 0%/100%.
+      if (h.link_coverage != null) {
         lines.push(`Link coverage (entities): ${(h.link_coverage * 100).toFixed(1)}%`);
+      } else if (h.entity_page_count !== undefined) {
+        lines.push(`Link coverage (entities): n/a (${h.entity_page_count} entity page(s) — too few to grade)`);
       }
-      if (h.timeline_coverage !== undefined) {
+      if (h.timeline_coverage != null) {
         lines.push(`Timeline coverage (entity pages): ${(h.timeline_coverage * 100).toFixed(1)}%`);
+      } else if (h.entity_page_count !== undefined) {
+        lines.push(`Timeline coverage (entity pages): n/a (${h.entity_page_count} entity page(s) — too few to grade)`);
       }
       if (h.timeline_coverage_score !== undefined) {
         lines.push(`Timeline density (all pages): ${h.timeline_coverage_score}/15 (whole-brain brain-score component)`);

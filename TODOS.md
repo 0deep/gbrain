@@ -1,5 +1,129 @@
 # TODOS
 
+## chennai fix-wave follow-ups (filed 2026-08-16)
+
+- [ ] **P1 — read_latency_under_sync hangs from 6a905a1e (#4143); 6a905a1e's
+  read-path hunks are the revert candidate.** **What:** phase B of
+  `tests/heavy/read_latency_under_sync.sh` never returns; the workload's own
+  600s timeout kills it (exit 124). **Investigation so far (chennai wave,
+  timeboxed):** reproduced 2/2 on darwin at wave HEAD with default params
+  (500/200/4); a stderr-instrumented copy of the SAME workload at the SAME
+  params passes cleanly (writers finish by query ~11), and small params
+  (50/20/4) pass — the per-iteration stderr writes act as load-bearing yield
+  points, consistent with the repo's known Bun timers-phase starvation class
+  (cf. GBRAIN_SYNC_YIELD_EVERY: `setTimeout(0)`, NOT `setImmediate` — "Bun
+  starves the timers phase under a tight loop"). Suspect surface: #4096's
+  hybrid.ts read-path rework (embedQueryBounded's AbortSignal.timeout pairs +
+  query-cache/mode changes) turning phase B into a microtask-dominated spin
+  that starves timers. Reporter's Linux bisect (100% reproducible, first bad
+  6a905a1e) is in #4143. **Next:** either root-cause the starvation (try a
+  setTimeout(0) yield in the phase-B loop to confirm the class, then find
+  which #4096 await lost its macrotask boundary) or revert 6a905a1e's
+  hybrid.ts hunks and re-run the lane. Harness hardening also owed: count
+  swallowed query errors (all-fail should not read as latency data), bound
+  the `Promise.allSettled(writers)` wait, per #4143's own notes. **Also:**
+  the Heavy Tests lane comes back `skipped` on in-repo branches, so this
+  gates nothing upstream — fix the lane gating or this class stays invisible.
+  **Effort:** M. **Priority:** P1.
+
+- [ ] **P2 — Cache-MODE enum: implicit vs Anthropic-explicit prompt caching.**
+  **What:** replace `supports_prompt_cache`'s boolean/predicate with a mode
+  (`explicit-anthropic` | `implicit` | `none`) so the gateway's cache-marker
+  injection is driven by MODE, not by "caching exists". **Why:** the Google
+  predicate fix (#4158) is functionally safe today only because anthropic-
+  namespaced providerOptions are ignored on native-google — a transport-level
+  pin test (`recipe-google-prompt-cache.test.ts`) guards that; the semantic
+  conflation stays until modes exist. **Context:** cross-model review finding
+  on PR #4159; the pin test names this TODO. **Effort:** M (CC: S). **P2.**
+- [ ] **P2 — Abort-signal threading through BasePhaseOpts + dream generators.**
+  **What:** thread an AbortSignal from the job deadline into every calibration
+  phase's LLM calls so an in-flight hung request is CANCELLED, not just
+  observed at the next loop boundary. **Why:** #4168's clamp restores the
+  clean partial-exit but a wedged provider call still burns the reserve.
+  **Context:** adjacent to banked PR #4077 (cooperative abort through
+  synthesis) — the same seam should serve both. **Effort:** M. **P2.**
+- [ ] **P2 — transcripts parser: surface out-of-set speaker headings (#4136).**
+  **What:** optional ParseResult field (`suspect_heading_labels` + count) when
+  a heading-only anchor-shaped continuation line with an out-of-set label is
+  folded under a heading-anchored multi_line pattern; extract-conversation-
+  facts warns. **Why:** silent speaker misattribution is accepted parse today.
+  **Context:** reporter offered the PR (green-lit in the issue thread with the
+  three-label reproducer as tests); keep phase `regex_match`; a decline
+  threshold is a follow-on decision. **Effort:** M. **P2.**
+- [ ] **P2 — skillopt field-report items (#4119, all verified at HEAD).**
+  **What:** (a) in-loop runtime-deadline check (orchestrator.ts:440 is
+  step-granular); (b) output-size-aware cost estimate (preflight.ts fixed
+  800-token constant); (c) validation-gate n-gram overlap detector vs judge
+  definitions; (d) stronger bootstrap judges; (e) opt-in `--hermetic-config`
+  (CLAUDE_CONFIG_DIR) for claude-cli children — default-on needs its own
+  security decision (the provider deliberately rides the operator's ~/.claude
+  OAuth session); (f) docs: rule judges as a gameable optimizer target, D13
+  limitation, cap sizing, human review of proposed.md is load-bearing.
+  **Context:** issue thread carries the full analysis; CLAUDE_CONFIG_DIR is
+  the documented interim mitigation. **Effort:** M spread. **P2.**
+- [ ] **P3 — orphans.exclude_domains (feature, #4157).** Third exclusion axis
+  on the shared orphan policy, matched on the derived domain; must thread the
+  orphans denominator query AND both engines' getHealth page-scope rows
+  (engine parity). **Effort:** S. **P3.**
+- [ ] **P3 — dream.synthesize flat/root output_root (feature, #4117).**
+  Per-family prefix shape (reflections/originals prefixes derived into prompts
+  AND the fail-closed allow-list; default preserves wiki/). No config-registry
+  drift to fix (`dream.` prefix already accepted). **Effort:** M. **P3.**
+- [ ] **P2 — test debt from the chennai wave's pre-landing review (deferred
+  with rationale, not skipped).** (a) `/mcp` SDK-transport integration test:
+  spin the serve-http surface with a legacy no-grant token end-to-end and
+  assert the federated source list matches `localFederatedSourceIds` — the
+  unit precedence test pins the resolver but not the transport wiring; also
+  pin `AuthInfo.hasSourceGrant` at the oauth-provider construction site.
+  (b) postgres `getHealth` parity e2e for the islanded/coverage changes —
+  unit coverage is PGLite-only; the DATABASE_URL-gated parity lane should
+  assert entity_page_count + null-coverage-below-floor on real Postgres.
+  (c) transcripts replay-reconcile tests for WITHIN-TURN duplicate
+  tool_use_id after migration v131 (same id, same message_idx — provider
+  emits the dup inside one message). **Effort:** M spread. **P2.**
+- [ ] **P2 — adversarial-review residuals on the chennai wave (verified real,
+  deferred with rationale).** (a) subagent tool-ledger zero-row settlement
+  observability: in the residual zombie race a pending INSERT can be swallowed
+  by ON CONFLICT DO NOTHING, the tool still executes, and the settle UPDATE
+  then matches 0 rows — the outcome is silently unrecorded and a non-idempotent
+  tool can re-execute on replay. Add a rowcount check + job-log warn (needs a
+  logging seam in the persist helpers). (b) extract-atoms tombstones cover
+  pages only: `recordPageFailureCount` returns null for `kind !== 'page'`, so
+  a transcript that deterministically yields malformed output re-spends LLM
+  budget every cycle forever — extend #4148's failure-count machinery to
+  transcript items. (c) getHealth coverage numerators are not liveness-
+  filtered while islanded now is (#4153): a page whose only inbound link is
+  from a soft-deleted page counts as covered AND orphaned simultaneously;
+  align the coverage EXISTS subqueries with the islanded liveness JOINs in
+  both engines (parity + bootstrap-probe update). **Effort:** M spread. **P2.**
+- [ ] **P3 — conversation-parser: corpus-level false-positive receipt for the
+  multi_line bold-name-date builtin (#4163 follow-on).** Flipping the builtin
+  to `multi_line` + score_continuations_as_body means non-conversation prose
+  with as few as two `**Name** (date):`-shaped lines can clear the 5% density
+  floor (every other line counts as a continuation) and parse as a
+  conversation, feeding facts extraction with garbage segments. Build a
+  small negative corpus (essays/notes with incidental bold-date lines) and
+  either raise the floor for this builtin or require a minimum SPEAKER count.
+  Adjacent to the #4136 suspect-heading work above. **Effort:** S. **P3.**
+- [ ] **P3 — gateway expand(): record spend for a generateObject call that
+  throws after consuming tokens (#4121 follow-on).** The schema-rejection →
+  viaText fallback is the double-billed shape; the first call's tokens go
+  unrecorded because usage is only read on success. If the SDK error carries
+  usage, record it before the fallback retry. **Effort:** S. **P3.**
+- [ ] **P3 — eval-contradictions: reject flag-shaped slugs at render time.**
+  A slug beginning with `-` renders into `takes supersede '<slug>'` as a
+  flag-shaped positional; the pasted command errors rather than executes, but
+  a render-time shape check (or `--` separator support in the takes CLI)
+  would make the generated command paste-safe for any slug a remote MCP
+  writer can mint. **Effort:** S. **P3.**
+- [ ] **P3 — DRY refactors flagged by the review army (correct today,
+  duplicated shape).** (a) hoist the settlement-status subquery duplicated
+  across grade-takes call sites into one helper; (b) extract the three-tier
+  resolution (per-call > config > default) repeated in pace-mode/search-mode/
+  probe-timeout into a shared `resolveTiered` helper; (c) `renderBlock`-style
+  functions taking 6+ positional args → params object; (d) the deadline-skip
+  preamble repeated at the top of each cycle phase → shared guard in
+  base-phase.ts. **Effort:** S each. **P3.**
 ## Multi-agent wave follow-ups (cathedral-6, `gbrain agent register`)
 
 - [ ] **P2 — archived sources keep previously-granted federated reads until
