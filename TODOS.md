@@ -1,5 +1,32 @@
 # TODOS
 
+## Fix-wave #4116-#4168 follow-ups (filed 2026-08-16; plan: ~/.claude/plans/system-instruction-you-are-working-compiled-tide.md)
+
+- [ ] **P2 — Expansion reserve()/cap enforcement.** #4121 shipped record-only: expansion spend lands in the tracker (and counts against the ceiling at the NEXT chat reserve) but expand() itself never pre-flights a reserve. A reserve would hard-disable expansion for unpriced local models under any cap (BudgetExhausted reason no_pricing fires whenever a cap is set and the model has no pricing entry). Right shape: reserve only when `isModelPriceable()` (budget-tracker.ts), degrade to `[query]` on denial (the reserve_denied audit row already writes), and apply an output cap (EXPANSION_FAILED_PESSIMISTIC_OUTPUT_TOKENS exists as the accounting constant; passing it to the SDK calls is the behavior change this defers). Files: src/core/ai/gateway.ts, test/core/budget/expand-records-budget.test.ts.
+
+- [ ] **P1 — Legacy Anthropic-direct subagent spend bypasses the tracker entirely.** The DEFAULT subagent path uses the raw Anthropic client (`makeAnthropic().messages`, subagent.ts ~:194; the gateway loop runs only when `agent.use_gateway_loop`), so per-job dollars — which dwarf expansion — never reach withBudgetTracker scopes, despite the A1 ordering comment asserting otherwise. Found while verifying #4121. Fix is its own seam (route the legacy loop's calls through chat() or a record shim), not a fix-wave rider. Files: src/core/minions/handlers/subagent.ts, src/core/ai/gateway.ts.
+
+- [ ] **P3 — models doctor probes chat(), never the real expand() path.** probeModel always calls gateway chat() even for touchpoint 'expansion' (src/commands/models.ts ~:581/:684), so it validates reachability but not the generateObject/generateText branch selection production uses. A real expand() probe needs a distinguishable success signal (expand swallows errors and returns [query]) — assert `result.length > 1` + a new failure classification. Self-contained change.
+
+- [ ] **P2 — racedTimePhase + cycleSignal for the three calibration phases.** propose_takes/grade_takes/calibration_profile run via bare timePhase with no signal (cycle.ts ~:2411-2441; contrast the raced patterns call at ~:2245), so lock-steal/abort cannot interrupt them mid-phase. #4168 fixed the budget half; the abort half widens into signal semantics and deserves its own review. Files: src/core/cycle.ts, src/core/cycle/propose-takes.ts.
+
+- [ ] **P3 — transcript.ts renderBlock still renders v2 gateway blocks as "Unknown block type".** The absorbed #4156 rekeyed the tool ledger to (message_idx, tool_use_id); teaching renderBlock the 'tool-call'/'tool-result' ChatBlock shapes is the remaining half so `gbrain agent logs` shows gateway-path tool use readably. Files: src/core/minions/transcript.ts, test/subagent-transcript.test.ts.
+
+- [ ] **P3 — consolidate the five hand-rolled bounded-wait copies.** Promise.race + setTimeout + clearTimeout now lives in hybrid.ts:151/:898, eval-capture.ts:203, supervisor.ts probeQueueState, telemetry's drain, and pglite-engine's bounded close. A shared `raceBounded(promise, ms)` helper would kill the copy-drift class. Sweep, don't rush — each copy has slightly different timeout/cleanup semantics to preserve.
+
+- [ ] **P2 — Heavy Tests lane gates nothing on in-repo branches.** #4143 shipped broken for a month because the lane comes back `skipped` on branch pushes and only a downstream fork ran it nightly. Either run a bounded subset (the read_latency workload at reduced params) in PR CI, or make the nightly failure page someone. Files: .github/workflows (heavy lane), tests/heavy/.
+
+- [ ] **P3 — conversation-parser eval scorer should fail positive fixtures that report unrecognized_headings.** The corpus now carries markdown-heading-turn fixtures (#4136), but scoreFixture doesn't consider the new diagnostic; a pattern regression that folds speakers would still pass recall-based scoring. Files: src/core/conversation-parser/eval.ts, test/fixtures/conversation-formats/.
+
+- [ ] **P3 — file the PGLite close()-deadlock upstream.** Verified: with any statement in flight, `db.close()` AND the in-flight query's promise both never settle (permanent, not slow). No prior report found upstream (searched 2026-08-16). Minimal repro exists in test/pglite-engine-disconnect.serial.test.ts invariant #6; extract into a standalone snippet for electric-sql/pglite.
+
+- [ ] **P2 — doctor check for repeated insufficient_cycle_budget skips.** Post-#4168 a brain whose earlier phases eat the whole job budget skips propose_takes EVERY cycle while cycle_freshness stays green ('partial' accepted) — silent starvation behind a healthy dashboard. Detect N consecutive skip reasons in recent autopilot-cycle results and surface a doctor warn with the raise-interval/anchor hint. Files: src/commands/doctor.ts, src/core/cycle/propose-takes.ts.
+
+- [ ] **P3 — #4136 declined pages consume `--limit` slots on bounded runs.** The decline is deliberately non-terminal (no durable outcome row), so declined pages re-enter every enumeration as claimable and count against `opts.limit` (`processedPagesCount += claimable.length`, extract-conversation-facts.ts) — a bounded manual run over a corpus where declined pages sort ahead can spend its whole limit re-declining the same pages while fresh pages starve. The cycle backfill passes no limit (walltime-bounded), so production is unaffected. Fix: return a per-page declined marker from processPage through the pool result and exclude declines from processedPagesCount, or write a short-TTL outcome row. Found by the ship adversarial pass.
+
+- [ ] **P3 — unclosed code fence suppresses the #4136 folded-heading detector for the rest of the document.** Fence tracking now matches marker TYPE (``` vs ~~~, adversarial fix), but a single unclosed fence — common in truncated LLM output — still disables detection below it (CommonMark-consistent; wrong fail-direction for a detector). Consider bounding fence suppression (e.g. reset at the next recognized speaker anchor). Files: src/core/conversation-parser/parse.ts.
+
+- [ ] **P3 — codex CLI on this machine cannot start while its required MCP server is unreachable.** Every `codex exec` dies after a 30s handshake timeout when the tailnet gbrain MCP endpoint is down; `-c mcp_servers={}` does not bypass. Outside-voice reviews silently lose cross-model coverage (Claude-subagent fallback fires). Make the server optional in codex config, or teach the review preflight to detect-and-warn.
 ## v0.46.15.0 identity/retrieval wave follow-ups (filed at ship; decisions recorded at CEO review + outside voice)
 
 - [ ] **P2 — Codex adapter full production flip.** v0.46.15 integrated the REAL rollout
@@ -365,6 +392,7 @@
   A distinct `mcp:capture` stamp needs a trusted internal channel label through the CV6
   else-branch — its own small trust review, filed rather than rushed. **Why:** finer
   provenance analytics on ingestion channels. **Effort:** S, review-bound.
+
 ## Five-issue fix wave follow-ups (backlinks corruption / malformed paths / type warnings / getPage scoping / queue admission)
 
 - [ ] **P2 — migrate the remaining fs writers to core/atomic-write.** **What:**
@@ -2668,7 +2696,7 @@ Filed from the v0.42.25.0 ship review (Claude + Codex adversarial + pre-landing)
 All latent / hardening — none are user-reported bugs. The unification landed a
 single canonical `src/core/model-pricing.ts` with `canonicalLookup`.
 
-- [ ] **`canonicalLookup` is case-sensitive (silent-miss undercount).** `src/core/model-pricing.ts:canonicalLookup` does exact-key + `splitProviderModelId` lookups with no lowercasing, so `ANTHROPIC:claude-opus-4-8` or `anthropic:CLAUDE-OPUS-4-8` return `undefined` → consumers that treat a miss as zero-cost (cross-modal runner note, cost-tracker silent-Haiku, skillopt Sonnet fallback) silently mis-budget. Latent today (recipe/CLI paths emit lowercase), but the fail-mode is a silent undercount, not a throw. Fix: lowercase provider+model before lookup in `canonicalLookup`. Add a mixed-case test. Priority: P3.
+- [x] **`canonicalLookup` is case-sensitive (silent-miss undercount).** **Completed:** #4123 fix wave (2026-08-16). `canonicalLookup` now falls back to a case-insensitive lookup folding BOTH sides (a lazily-built lowercased view of `CANONICAL_PRICING` — some canonical keys carry cased model tails verbatim, so folding only the probe would have created the mirror-image miss). Exact matches stay first; mixed-case tests + a no-case-collision guard pinned in `test/model-pricing.test.ts`.
 
 - [ ] **takes-quality `getPricing` is exact-key only.** `src/core/takes-quality-eval/pricing.ts:getPricing` does a raw `MODEL_PRICING[modelId]` lookup. A user passing a bare/slash/dotted form of an allowlisted model (e.g. `google:gemini-2.0-flash` when the allowlist holds `google:gemini-2-flash`, or `anthropic/claude-opus-4-8`) hits `PricingNotFoundError` even though canonical prices it. Safe direction (fail-closed) but a usability regression. Fix: normalize the lookup key through `canonicalLookup`/`splitProviderModelId` before the allowlist check, keeping fail-closed for genuinely-unsupported models. Priority: P3.
 
@@ -5690,7 +5718,7 @@ iteration's residuals.
 ### Fix `bun build --compile` WASM embedding for PGLite
 **What:** Submit PR to oven-sh/bun fixing WASM file embedding in `bun build --compile` (issue oven-sh/bun#15032).
 
-**Why:** PGLite's WASM files (~3MB) can't be embedded in the compiled binary. Users who install via `bun install -g gbrain` are fine (WASM resolves from node_modules), but the compiled binary can't use PGLite. Jarred Sumner (Bun founder, YC W22) would likely be receptive.
+**Why:** Historically PGLite's WASM files couldn't be embedded in the compiled binary. STALE-PREMISE NOTE (#4116): "users who install via bun-global are fine (WASM resolves from node_modules)" turned out to be false — a bun-global UPGRADE hoists `@electric-sql/pglite` out of gbrain's node_modules and the repo-relative asset imports broke every command; fixed by `resolvePgliteAssetPaths()`'s tiered lookup. The compiled-binary half was separately fixed by the embedded-assets work (see the FIXED ledger entry guarded by `scripts/check-pglite-embedded.sh`). An upstream Bun fix would still simplify both lanes. Jarred Sumner (Bun founder, YC W22) would likely be receptive.
 
 **Pros:** Single-binary distribution includes PGLite. No sidecar files needed.
 
@@ -6524,7 +6552,13 @@ respective shapes. Small, mechanical; pinned by `test/init-embed-check.test.ts`
   because `createReadStream` — unlike `readFileSync` — can't read `/$bunfs`
   paths). `src/core/pglite-engine.ts` spreads `getEmbeddedPgliteOptions()` at
   both `PGlite.create()` sites, so the Bun-vfs #1340 ENOENT no longer fires for
-  a correctly-built binary. Guarded by `scripts/check-pglite-embedded.sh`
+  a correctly-built binary. #4116 follow-up: the file-typed imports moved into
+  the `pglite-embedded-asset-paths.ts` bundler anchor behind
+  `resolvePgliteAssetPaths()`'s tiered lookup, because bun-global installs
+  hoist pglite out of gbrain's node_modules on upgrade and the eager
+  repo-relative imports crashed every command at module load; tier 2 derives
+  the dist dir via module resolution (pinned by
+  `test/pglite-hoisted-install.serial.test.ts`). Guarded by `scripts/check-pglite-embedded.sh`
   (compiles a smoketest and asserts a real PGLite query round-trips), wired into
   `bun run verify` + `check:all` + `check:pglite-embedded`. The real-agent e2e
   harness (`test/helpers/agent-harness.ts`) now resolves to the fast compiled
