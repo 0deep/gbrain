@@ -1,5 +1,107 @@
 # TODOS
 
+## v0.46.15.0 identity/retrieval wave follow-ups (filed at ship; decisions recorded at CEO review + outside voice)
+
+- [ ] **P2 — Codex adapter full production flip.** v0.46.15 integrated the REAL rollout
+  parser (`src/core/transcripts/codex.ts`) for turn selection, but fragment DELIVERY
+  remains a harness-shaped contract (no shipped codex injection path exists yet). When
+  one lands, flip the seam like the claude-code row (run-scoped infra via
+  setupRun/teardownRun; bank the baseline in the same commit). Context: outside-voice F5.
+- [ ] **P2 — Per-model calibration for `search.evidence_cosine_floor` (0.80) and
+  `search.autocut_min_top` (0.35).** Both are provider-scale-dependent; both are
+  config-overridable today. The September reranker default flip (zerank-2 →
+  voyage:rerank-2.5) MUST re-tune autocut_min_top — add that line to the v0.47
+  removal checklist when executing it. Context: outside-voice F16. Ship-review
+  addendum (F6): the floor is not purely a label — `create_safety` consumes the
+  evidence tier and gates duplicate-page creation, so a floor that never fires on
+  a low-cosine-scale embedder degrades `exists`→`probable` and loosens the
+  don't-create-a-duplicate contract. Calibrate BEFORE the September embedder
+  default flip, and include a per-model floor table, not one global number.
+- [ ] **P2 — Cat 3 undocumented-alias enrichment.** The gbrain-evals Cat 3 runner's
+  undocumented class (initials, nicknames, typos) needs alias-TABLE growth
+  (enrichment writes page_aliases), not resolver changes — the v0.46.15 alias_exact
+  arm only helps documented aliases. Pair with the evals-repo runner repair
+  (seed page_aliases + route through resolveEntitySlug). Context: outside-voice F1.
+- [ ] **P3 — Lowercase bigram alias candidates.** v2 of the weak-candidate pass
+  (`entity-salience.ts`): "sable finch" as a two-token weak alias probe. Unigram
+  covers the alias-table convention today; bigram needs its own ambiguity study.
+- [ ] **P3 — Precomputed name-token index at ingest.** The surname arm's
+  `lower(title) LIKE '% <token>'` scan is bounded by the reflex fail-open budgets;
+  if reflex latency telemetry creeps on 10K+-page brains, build the token table
+  and swap the arm to an indexed lookup.
+- [ ] **P3 — Re-eval community #717 (graph-hop wikilink rerank, claimed +2.6/+2.8
+  P@5/R@5) against the post-v0.46.15 ranker** — the concept intent + dedup scope fix
+  may have absorbed part of its headroom.
+- [ ] **P2 — #1663 remainder (issue REOPENED at ship): query-shape routing,
+  structural exact-lookup tier, CRAG confidence escalation.** The issue was closed
+  with these three unbuilt; the wave shipped the adjacent pieces (concept intent,
+  autocut weak-top floor, evidence-on-cosine) but deliberately deferred these.
+- [ ] **P3 — Positive underfill-event coverage for searchVector escalation.** The
+  two NEGATIVE paths are pinned (no event on genuine short corpus / offset past
+  end); the positive fire-at-cap assertion needs a >1000-chunk fixture that pushes
+  `innerLimit` to `HNSW_EF_SEARCH_MAX` with the pre-DISTINCT pull full. Pair with
+  a >400-chunk second-escalation engine-parity case (both current fixtures stop at
+  one escalation). Also cover the exact-scan lane (ship-review): a >2000-dim
+  vector column (no HNSW) must keep deep offsets working — the cap now keys on
+  `hnswIndexExpected`, pinned only by inspection. From the ship coverage audit
+  (C5/T7 partials).
+- [ ] **P2 — Reflex IPC version skew: weak candidates against an old `gbrain serve`.**
+  An upgraded hook client emits `weak: true` candidates; a not-yet-restarted older
+  serve ignores the unknown field and runs lowercase words through ALL arms
+  (title/slug-suffix), fabricating pointers during the upgrade window (ship-review
+  F4). Options: protocol version tag on ResolveRequest with client-side weak-strip
+  when the server doesn't ack; or an upgrade-flow serve restart requirement made
+  explicit. Exposure ends at serve restart; kill switch (`GBRAIN_RETRIEVAL_REFLEX_
+  LEXICAL_ARMS=false` on the client) also closes it since the client then sends no
+  weak candidates.
+- [ ] **P3 — Shared wall-clock budget across searchVector escalation attempts.**
+  Each escalation retry gets a FRESH 8s statement_timeout on Postgres (worst ~32s
+  per vector arm; multiplied under tokenmax multi-query expansion). Share one
+  deadline across the loop's attempts (ship-review F8). The loop only fires on
+  dense-wall shapes, and per-op timeouts bound the blast radius — hence P3.
+- [ ] **P1 — Cat 13 conceptual recall: the concept tilt is NOT enough; the fusion
+  itself is the suspect.** Pre-merge receipt (v0.46.15, voyage-4/1024 space, 500
+  seeded probes, all adapters on the SAME gateway): bare vector 49.5 nDCG@5,
+  grep-only 46.2, vector+grep RRF fusion 40.5, gbrain hybrid 35.6 — and a master
+  A/B at the merge-base scored gbrain BYTE-IDENTICAL (35.6, every template), so the
+  wave neither regressed nor improved Cat 13. Two honest findings: (a) the
+  pre-registered "hybrid ≥ bare vector" target is NOT met — the ±10-20% RRF-k
+  concept tilt provably works on a discriminating corpus
+  (test/search/concept-weights.test.ts) but is a wash on this probe mix; (b)
+  FUSION ITSELF loses to its own best single arm here (40.5 < 46.2 < 49.5) — the
+  keyword arm's noise on paraphrase probes drags the merge below either component.
+  Next: instrument per-arm rank contributions on the Cat 13 losers
+  (synonym 38.7 vs vector 66.4 is the widest), then evaluate arm-confidence-
+  weighted fusion (down-weight keyword when its top score is weak) rather than a
+  bigger static tilt. Ship with the evals-repo PR (the three uncommitted gateway-
+  config patches in gbrain-evals are part of it). Also note: the recorded 47.0-vs-
+  49.1 OpenAI-space numbers cannot be reproduced keylessly; the voyage-space gap
+  is WIDER — stronger embedders make hybrid's keyword noise relatively costlier.
+
+## LongMemEval temporal gap — date-proximity signal SPIKE-REJECTED (filed v0.46.15.0, identity/retrieval wave)
+
+- **P2 — Reframe the temporal-reasoning gap (94.7% vs MemPal 96.2%, the only categorical
+  public-benchmark loss) around what the questions actually are.** The v0.46.15 wave
+  pre-registered a spike gate before building a date-proximity ranking term
+  (`COALESCE(effective_date, updated_at)` proximity to query-text-extracted since/until
+  bounds, per the outside-voice-amended plan). The spike FIRED the stop condition:
+  a 12-question sample of the 133 `temporal-reasoning` questions in `longmemeval_s`
+  contained ZERO extractable absolute bounds — they are duration-arithmetic
+  ("How many days passed between X and Y?", "how many weeks ago did I …") and
+  pairwise-ordering ("which happened first …") questions. A scalar date-proximity
+  boost fires on none of them; retrieval for these is EVENT-DESCRIPTION recall
+  (find the sessions naming the events), and the date math belongs to the answer
+  layer — which is what the existing `findTrajectory` routing already does.
+  Next honest hypotheses, in order: (a) measure per-question retrieval recall on the
+  temporal slice to locate WHERE the 1.5pt is lost (retrieval vs trajectory coverage
+  vs answer extraction); (b) if retrieval: event-phrase recall (the event descriptions
+  are long noun phrases — expansion/paraphrase territory, adjacent to the v0.46.15
+  concept lane); (c) if trajectory: widen `extractCandidateEntities` coverage on
+  event-shaped (non-person) anchors. Do NOT rebuild the date-proximity boost without
+  new evidence — this entry is the receipt for why it doesn't exist.
+
+
+
 ## chennai fix-wave follow-ups (filed 2026-08-16)
 
 - [ ] **P1 — read_latency_under_sync hangs from 6a905a1e (#4143); 6a905a1e's
@@ -1059,7 +1161,7 @@ Deferred from the BrainBench wave (eng-reviewed; plan + GSTACK REVIEW REPORT at
 
 - [ ] **`--live` agent-in-the-loop know-to-ask.** Replay fixtures with a real model deciding whether to issue retrieval calls; grade the agent, not just the deterministic reflex. Pre-registered in `docs/eval/BRAINBENCH.md` (the v1 metric grades the injection decision, which IS the shipped mechanism). Needs: seeded N-repeat methodology for model stochasticity + budget rails. Priority: P2.
 - [ ] **Intrusion-budget gating calibration.** `avg_injected_tokens` is reported, non-gating (decision 18) — a wrong threshold is worse than none. After a few weeks of scoreboard data across PRs, pick calibrated per-seam thresholds and promote it to a gated metric. Priority: P2.
-- [ ] **Flip contract adapters to production — claude-code half now unblocked.** `adapters/claude-code.ts` exports the UserPromptSubmit hook wire types; the real hook (`gbrain hook user-prompt`, shipped with the bootstrap lane and extended with cross-turn dedupe + the channel feedback loop in the cathedral-3 convergence) swaps the in-process transport for an exec of the hook script and flips `seam: 'contract'` → `'production'` with continuous bench numbers. Note the production hook also exercises transcript-based dedupe, which the memoryless contract row deliberately doesn't. For the codex half: the cathedral-4 transcripts lane shipped a verified codex rollout PARSER (`src/core/transcripts/codex.ts`, structural turn selection pinned against a live sample) — a codex contract adapter can now consume it instead of waiting for a hook integration. Priority: P1 (the claude-code integration has landed; codex parsing has landed; this is now standalone-actionable).
+- [x] **Flip contract adapters to production — claude-code half DONE (v0.46.15 identity/retrieval wave).** `adapters/claude-code.ts` now drives the real `gbrain hook user-prompt` path (synthesized Claude Code JSONL transcripts, run-scoped resolve-IPC server with `turn_context` handler, `HookIo` seams) and the scoreboard row is `seam: 'production'`, banked with justification in the same commit. The codex half (real DELIVERY path, not just the parser) is re-filed as the P2 "Codex adapter full production flip" entry in the v0.46.15.0 wave section at the top of this file.
 - [ ] **Cathedral 1 conformance-kit fixture import.** The memory-verbs conformance scenarios convert to BrainBench fixtures via the published `evals/brainbench/schema/fixture.schema.json` once `garrytan/cathedral-1` merges ("conformance tests double as BrainBench seed fixtures", decision log 2026-06-12). Free corpus growth from already-reviewed scenarios. Blocked by: cathedral-1 on master. Priority: P2.
 - [ ] **Live-embeddings fidelity mode (`--embeddings`).** Hermetic CI grades the keyword/alias arms only (disclosed); an opt-in mode seeding real embeddings would grade write-back/continuity retrieval through the vector path. Same budget rails as `--llm`. Priority: P3.
 - [ ] **Community fixture intake + competitor adapters.** The TD1 remainder after the generated corpus absorbed in-PR growth: an `external-authors/`-style intake path for contributed fixtures (validator + privacy guard already gate them) and adapters for non-gbrain memory systems against the published schemas, enabling true head-to-head rows in the gbrain-evals scorecard. Priority: P3.
@@ -1696,10 +1798,15 @@ is deterministic + precision-biased. See plan + GSTACK REVIEW REPORT at
   wave: `extractCandidatesFromWindow` now covers assistant-introduced entities and
   pronoun follow-ups whose antecedent was NAMED in the rolling window; true pronoun
   coreference for never-named antecedents remains with the LLM-pass idea.)*
-- [ ] **P3 — recall knob: optional fuzzy/prefix-expansion resolution.** The resolver
-  (`src/core/context/retrieval-reflex.ts`) is exact-only (alias + title + slug-suffix)
-  for precision. Revisit adding `resolveEntitySlug`'s trgm-fuzzy / prefix-expansion
-  arm, gated on an unambiguous single hit, if recall telemetry comes back weak.
+- [x] **P3 — recall knob: optional fuzzy/prefix-expansion resolution.** RESOLVED
+  differently by the v0.46.15 identity wave, with a receipt: trigram fuzzy in the
+  reflex is deliberately REJECTED — the BrainBench adversarial near-miss class
+  (`"<Name>er"` for a real `<Name>` page) is gold-silent and any usable trigram
+  threshold would false-fire on it. The recall gap the fuzzy arm targeted was
+  closed by exact NORMALIZED-LEXICAL arms instead: the lowercase weak-alias arm
+  + the surname arm (know_to_ask 0.15→0, push_recall +9.6pp, false_fire/precision
+  unmoved). Do not re-add trigram here without a fixture that defeats the
+  near-miss class first.
 
 ## gbrain#1972 job-layer follow-up (v0.43+)
 
@@ -3329,14 +3436,12 @@ The original 3 items as filed (kept for traceability):
   `eval_capture_failures.reason` enum cleanup from the v0.25.0 P1 surgical
   hardenings list. Effort: human ~3 days / CC ~3 hours.
 
-- [ ] **P0 — Wire nightly quality probe into autopilot scheduler.** The
-  phase ships callable (`src/core/cycle/nightly-quality-probe.ts`) with
-  full DI surface; doctor surfaces outcomes; the audit JSONL rotates
-  cleanly. What's NOT wired: `src/commands/autopilot.ts` doesn't invoke
-  `runNightlyQualityProbe(deps)` on its 24h cadence. Add the phase
-  trigger; honor `autopilot.nightly_quality_probe.enabled` config gate.
-  Already filed in v0.40.1.0 Track D follow-ups — re-filing here as P0
-  with explicit D1-wave dependency. Effort: human ~3 hours / CC ~30 min.
+- [x] **P0 — Wire nightly quality probe into autopilot scheduler.** DONE —
+  and this entry was STALE when the v0.46.15 wave audited it: autopilot's
+  tick body already invokes `runNightlyQualityProbe` behind the
+  `autopilot.nightly_quality_probe.enabled` gate
+  (`src/commands/autopilot.ts:1361-1386`, pinned by
+  `test/autopilot-nightly-probe-wiring.test.ts`). Nothing to build.
 
 ### D2 — Code-indexing promoted to P1 (peer of Cursor/Sourcegraph)
 
@@ -3767,19 +3872,12 @@ contributor traps.
   vary too much). Estimate: ~2 weeks. Filed during v0.40.1.0 Track D
   /plan-eng-review (see `~/.claude/plans/system-instruction-you-are-working-whimsical-acorn.md`).
 
-- [ ] **v0.41+: Wire the nightly quality probe into autopilot scheduling.**
-  v0.40.1.0 Track D shipped the phase (`src/core/cycle/nightly-quality-probe.ts`),
-  the audit JSONL (`src/core/audit-quality-probe.ts`), the doctor check
-  (`nightly_quality_probe_health` in doctor.ts), and the 10-question
-  placeholder fixture. What's NOT yet wired: `src/commands/autopilot.ts`
-  doesn't yet invoke `runNightlyQualityProbe(deps)` on its 24h cadence —
-  the phase is callable in isolation (good for testing) but no scheduled
-  loop calls it. To finish: add a phase trigger to the autopilot cycle loop
-  that calls the probe with concrete deps wiring (`isEnabled`,
-  `hasEmbeddingProvider`, `resolveMaxUsd`, `resolveRepoRoot`, real
-  `runLongMemEval` / `runCrossModalBatch` invocations via subprocess or
-  direct function call). Honor `autopilot.nightly_quality_probe.enabled`
-  config gate (already in doctor's read-side; needs autopilot read-side).
+- [x] **v0.41+: Wire the nightly quality probe into autopilot scheduling.**
+  DONE (stale entry swept by the v0.46.15 wave): autopilot's tick body
+  invokes `runNightlyQualityProbe` behind the
+  `autopilot.nightly_quality_probe.enabled` gate
+  (`src/commands/autopilot.ts:1361-1386`, pinned by
+  `test/autopilot-nightly-probe-wiring.test.ts`).
   Doctor surface is already in place to show outcomes; just need the
   scheduling lane. Estimate: ~3 hours.
 
