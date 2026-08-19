@@ -658,23 +658,29 @@ describe('http-transport: mcp_request_log audit', () => {
     } finally { srv.stop(); }
   });
 
-  test('21b. gated-op call → denied_after_list status (amendment 33 metric parity with OAuth transport)', async () => {
-    const TOK = 'audit-tok-denied';
-    const srv = await startTest({ validTokens: new Map([[hash(TOK), { id: 'a-2', name: 'audit-denied' }]]) });
+  test('21b. loopback operator trust: publish-gated op (list_skills) is allowed for a loopback local operator', async () => {
+    const TOK = 'audit-tok-allowed';
+    const srv = await startTest({ validTokens: new Map([[hash(TOK), { id: 'a-2', name: 'audit-allowed' }]]) });
     try {
-      // Pin the gate OFF on the DB plane (which wins over the file plane) so
-      // the developer's real ~/.gbrain/config.json can't flip this test —
-      // the call-time backstop then denies with detail config_key=…
+      // Gate OFF on the DB plane (which wins over the file plane). Under
+      // loopback local-operator trust the TCP peer is loopback → remote===false,
+      // and the publish gate is bypassed for local operators (the trust
+      // boundary is the OS), so list_skills SUCCEEDS rather than being denied.
+      // The remote-caller denial + denied_after_list classification is covered
+      // elsewhere where remote===true is pinned: denied-after-list.test.ts and
+      // the serve-http (SDK transport) tests.
       (srv.engine as { getConfig?: (k: string) => Promise<string | null> }).getConfig =
         async (key: string) => (key === 'mcp.publish_skills' ? 'false' : null);
       const r = await fetch(`${srv.url}/mcp`, { method: 'POST', headers: { 'Authorization': `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: rpc('tools/call', { name: 'list_skills', arguments: {} }) });
       const body = await r.json();
-      expect(body.result.isError).toBe(true);
-      expect(body.result.content[0].text).toContain('permission_denied');
+      // Loopback operator trust → list_skills SUCCEEDS: a success tool result
+      // has no `isError` key (it is only set true on denial).
+      expect(body.result.isError).toBeUndefined();
+      expect(body.result.content[0].text).toContain('"count"');
       await new Promise(res => setTimeout(res, 10));
       const row = srv.engine.audit[srv.engine.audit.length - 1];
       expect(row.operation).toBe('tools/call:list_skills');
-      expect(row.status).toBe('denied_after_list');
+      expect(row.status).toBe('success');
     } finally { srv.stop(); }
   });
 
